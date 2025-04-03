@@ -2,12 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/gookit/color"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -19,6 +21,12 @@ import (
 type FlowchartData struct {
 	Title   string `json:"title"`
 	Content string `json:"content"`
+}
+type FileEntry struct {
+	Key      string      `json:"key"`
+	Type     string      `json:"type"` // "file" or "dir"
+	Path     string      `json:"path"` // Relative path from storage root
+	Children []FileEntry `json:"children,omitempty"`
 }
 
 // Config holds application configuration
@@ -43,9 +51,13 @@ func init() {
 
 func main() {
 	// Create server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/flowcharts/", handleFlowcharts)
+
+	handler := enableCORS(mux)
 	server := &http.Server{
 		Addr:    "0.0.0.0:8080",
-		Handler: http.HandlerFunc(handleFlowcharts),
+		Handler: handler,
 	}
 
 	// Show ASCII art
@@ -53,7 +65,7 @@ func main() {
 
 	// Start server in goroutine
 	go func() {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			panic(err)
 		}
 	}()
@@ -109,13 +121,6 @@ func handleFlowcharts(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-type FileEntry struct {
-	Name     string      `json:"name"`
-	Type     string      `json:"type"` // "file" or "dir"
-	Path     string      `json:"path"` // Relative path from storage root
-	Children []FileEntry `json:"children,omitempty"`
-}
-
 func handleGet(w http.ResponseWriter, path string) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -144,6 +149,7 @@ func getDirectoryTree(rootPath string) ([]FileEntry, error) {
 
 	// Get relative path from storage root
 	relPath, _ := filepath.Rel(config.StorageDir, rootPath)
+	relPath = path.Clean(filepath.ToSlash(relPath)) // Convert to forward slashes
 
 	// Read directory contents
 	dirEntries, err := os.ReadDir(rootPath)
@@ -153,10 +159,10 @@ func getDirectoryTree(rootPath string) ([]FileEntry, error) {
 
 	for _, entry := range dirEntries {
 		fullPath := filepath.Join(rootPath, entry.Name())
-		childRelPath := filepath.Join(relPath, entry.Name())
+		childRelPath := path.Join(relPath, entry.Name())
 
 		node := FileEntry{
-			Name: entry.Name(),
+			Key:  entry.Name(),
 			Path: childRelPath,
 			Type: "file",
 		}
@@ -177,11 +183,7 @@ func getDirectoryTree(rootPath string) ([]FileEntry, error) {
 }
 
 func handleWrite(w http.ResponseWriter, r *http.Request, path string) {
-	// parse json request
-	if r.Header.Get("Content-Type") != "application/json" {
-		http.Error(w, "Invalid content type", http.StatusBadRequest)
-		return
-	}
+
 	decoder := json.NewDecoder(r.Body)
 	var data FlowchartData
 	err := decoder.Decode(&data)
@@ -189,10 +191,13 @@ func handleWrite(w http.ResponseWriter, r *http.Request, path string) {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
+	pathWithExt := path + ".txt"
 	// Create directory if it doesn't exist
-	os.MkdirAll(filepath.Dir(path), 0755)
+	os.MkdirAll(filepath.Dir(pathWithExt), 0755)
 
-	os.WriteFile(path, []byte(data.Content), 0644)
+	if data.Title != "" {
+		os.WriteFile(pathWithExt, []byte(data.Content), 0644)
+	}
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -200,4 +205,24 @@ func handleDelete(w http.ResponseWriter, path string) {
 	// Delete file or empty directory
 	os.RemoveAll(path)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// CORS middleware
+func enableCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Set CORS headers
+		w.Header().Set("Access-Control-Allow-Origin", "*") // Allow all origins (change in production!)
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Max-Age", "86400") // 24 hours
+
+		// Handle preflight requests
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		// Pass to next handler
+		next.ServeHTTP(w, r)
+	})
 }
