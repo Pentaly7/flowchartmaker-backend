@@ -102,8 +102,8 @@ func printBanner() {
 
 func handleFlowcharts(w http.ResponseWriter, r *http.Request) {
 	// Extract and sanitize path
-	path := strings.TrimPrefix(r.URL.Path, "/flowcharts/")
-	safePath := filepath.Clean(filepath.Join(config.StorageDir, path))
+	pathString := strings.TrimPrefix(r.URL.Path, "/flowcharts/")
+	safePath := filepath.Clean(filepath.Join(config.StorageDir, pathString))
 
 	// SECURITY: Prevent directory traversal
 	if !strings.HasPrefix(safePath, config.StorageDir) {
@@ -193,7 +193,16 @@ func handleWrite(w http.ResponseWriter, r *http.Request, path string) {
 	}
 	pathWithExt := path + ".txt"
 	// Create directory if it doesn't exist
-	os.MkdirAll(filepath.Dir(pathWithExt), 0755)
+	var dir string
+	if data.Title != "" {
+		dir = filepath.Dir(path)
+	} else {
+		dir = path
+	}
+	err = os.MkdirAll(dir, 0755)
+	if err != nil {
+		return
+	}
 
 	if data.Title != "" {
 		os.WriteFile(pathWithExt, []byte(data.Content), 0644)
