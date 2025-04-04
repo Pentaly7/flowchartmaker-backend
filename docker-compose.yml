@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: lrizkitegar/flowchart-maker
     container_name: flowchart-server
     volumes:
       - data:/storage
