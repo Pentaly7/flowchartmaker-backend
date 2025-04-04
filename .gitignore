@@ -2,3 +2,5 @@ storage
 *.exe
 .idea
 .vscode
+*frontend/*
+flowchartmaker-frontend/*
